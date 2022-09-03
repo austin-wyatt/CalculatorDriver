@@ -15,6 +15,8 @@ NTSTATUS CalcDeviceCreate(PWDFDEVICE_INIT DeviceInit)
 
 	if (NT_SUCCESS(status))
 	{
+		//Create the device interface. This is what the CALC_DEVICE_CONTEXT device extension is attached to.
+		//This device interface uses the GUID defined in public.h which will be used to find its system path later
 		status = WdfDeviceCreateDeviceInterface(
 			hDevice,
 			&CALCULATOR_GUID,
@@ -34,21 +36,29 @@ NTSTATUS InitializeDeviceInterface(WDFDEVICE Device)
 	NTSTATUS status;
 	WDFQUEUE queue;
 	WDF_IO_QUEUE_CONFIG queueConfig;
-	//We want to clear the device's buffer when destroyed so we need to initialize attributes for this queue
 	WDF_OBJECT_ATTRIBUTES attributes;
 
 	PCALC_DEVICE_CONTEXT deviceContext;
 
 	PAGED_CODE();
 
+	//Initialize the device's IO queue
 	WDF_IO_QUEUE_CONFIG_INIT_DEFAULT_QUEUE(&queueConfig, WdfIoQueueDispatchSequential);
+	//Assign read and write callbacks
 	queueConfig.EvtIoRead = CalcEvtIoRead;
 	queueConfig.EvtIoWrite = CalcEvtIoWrite;
 
+	//Initialize object attributes for this device. Since we have a device extension 
+	//we use the extended CONTEXT_TYPE macro which calls WDF_OBJECT_ATTRIBUTES_INIT
+	//followed by WDF_OBJECT_ATTRIBUTES_SET_CONTEXT_TYPE to assign the context type 
+	//to our device interface.
 	WDF_OBJECT_ATTRIBUTES_INIT_CONTEXT_TYPE(&attributes, CALC_DEVICE_CONTEXT);
+
+	//Assign our destructor callback
 	attributes.EvtDestroyCallback = CalcEvtDeviceContextDestroy;
 	attributes.SynchronizationScope = WdfSynchronizationScopeNone;
 
+	//Using the config and attributes we assigned, create the WDFQUEUE object for the device interface
 	status = WdfIoQueueCreate(Device, &queueConfig, &attributes, &queue);
 	
 	if (!NT_SUCCESS(status)) 
@@ -85,6 +95,7 @@ void CalcEvtIoRead(IN WDFQUEUE Queue, IN WDFREQUEST Request, IN size_t Length)
 		return;
 	}
 
+	//Retrieve the memory address that the read request wants the driver to place data into
 	status = WdfRequestRetrieveOutputMemory(Request, &memory);
 
 	if (deviceContext->ReadLength < Length) 
@@ -92,8 +103,10 @@ void CalcEvtIoRead(IN WDFQUEUE Queue, IN WDFREQUEST Request, IN size_t Length)
 		Length = deviceContext->ReadLength;
 	}
 
+	//Move the contents of the ReadBuffer into the request's memory
 	status = WdfMemoryCopyFromBuffer(memory, 0, deviceContext->ReadBuffer, Length);
 
+	//Return the amount of bytes that the requester will be recieving 
 	WdfRequestCompleteWithInformation(Request, STATUS_SUCCESS, Length);
 	return;
 }
@@ -108,7 +121,9 @@ void CalcEvtIoWrite(IN WDFQUEUE Queue, IN WDFREQUEST Request, IN size_t Length)
 	WDFMEMORY memory;
 	PCALC_DEVICE_CONTEXT deviceContext = GetCalcDeviceContext(Queue);
 
+	//Retrieve the memory address that the write request wants the driver to pull from
 	status = WdfRequestRetrieveInputMemory(Request, &memory);
+	//Pull the memory from the request memory into the WriteBuffer
 	status = WdfMemoryCopyToBuffer(memory, 0, deviceContext->WriteBuffer, Length);
 
 	if (NT_SUCCESS(status)) 
@@ -150,17 +165,22 @@ void ResolveInputBuffer(IN PCALC_DEVICE_CONTEXT deviceContext)
 				wordEnd = i;
 				inWord = FALSE;
 
+				//Fill the tempInstructionBuffer with a reversed and \0 padded version of the parameter string
 				FillTempBuffer(tempInstructionBuffer, writeBuffer, wordStart, wordEnd - wordStart);
 
+				//Check if our instruction is a number or a string. If it is a number then we want to convert the string 
+				//to an integer. Otherwise we want to cast the 4 byte tempInstructionBuffer into an integer
 				int newInstruction = atoi(writeBuffer + wordStart);
 				if (newInstruction == 0 && *writeBuffer + wordStart != '0')
 				{
 					newInstruction = *(int*)tempInstructionBuffer;
 				}
 				
+				//Place the new instruction onto the end of the instruction buffer 
 				*(deviceContext->InstructionBuffer + deviceContext->InstructionLength) = newInstruction;
 				deviceContext->InstructionLength++;
 
+				//Check if we are about to overflow and, if so, clear the instruction buffer
 				if (deviceContext->InstructionLength >= BUFFER_SIZE - 1)
 				{
 					KdBreakPoint();
@@ -182,6 +202,9 @@ void ResolveInputBuffer(IN PCALC_DEVICE_CONTEXT deviceContext)
 		}
 	}
 
+	//Zero out the write buffer to prepare for another write request
+	//(it would also be sufficient to set the WriteLength to 0 and simply
+	//write over the old data)
 	RtlZeroMemory(writeBuffer, deviceContext->WriteLength);
 	deviceContext->WriteLength = 0;
 
@@ -298,10 +321,11 @@ void EvaluateInstructions(IN PCALC_DEVICE_CONTEXT deviceContext, int newInstruct
 				CalculateValue(deviceContext);
 				break;
 			case CALC_INSTRUCTION_GET_BUFFER:
-				memcpy(readBuffer, instructionBuffer, deviceContext->InstructionLength);
+				memcpy(readBuffer, instructionBuffer, deviceContext->InstructionLength * sizeof(int));
 				deviceContext->ReadLength = deviceContext->InstructionLength * sizeof(int);
 				break;
 			case CALC_INSTRUCTION_GET_VALUE:
+				//print our calculated value into the read buffer
 				strLen = sprintf(readBuffer, "%ld", deviceContext->CalculatedValue);
 				deviceContext->ReadLength = strLen;
 				break;

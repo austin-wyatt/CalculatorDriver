@@ -1,5 +1,7 @@
 #include "driver.h"
 
+//Please do not load this driver onto your personal computer
+
 NTSTATUS DriverEntry(
 	_In_ PDRIVER_OBJECT DriverObject, 
 	_In_ PUNICODE_STRING RegistryPath
@@ -10,6 +12,7 @@ NTSTATUS DriverEntry(
 	WDFDRIVER hDriver;
 	WDF_DRIVER_CONFIG driverConfig;
 
+	//assign our DeviceAdd callback
 	WDF_DRIVER_CONFIG_INIT(&driverConfig, CalcEvtDeviceAdd);
 
 	KdPrintEx((DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL, "Calculator driver: DriverEntry\n"));
@@ -27,6 +30,7 @@ NTSTATUS CalcEvtDeviceAdd(
 {
 	PAGED_CODE();
 
+	//Appease the compiler
 	UNREFERENCED_PARAMETER(Driver);
 
 	NTSTATUS status;
